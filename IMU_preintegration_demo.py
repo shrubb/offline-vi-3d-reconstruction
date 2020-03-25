@@ -23,7 +23,7 @@ def plotGroundTruthPose(i):
     plt.pause(0.01)
 
 if __name__ == '__main__':
-    measured_imu, predicted_poses_gold, predicted_vNav_gold, true_poses = np.load('circle_gold.npy')
+    imu_measurements, predicted_poses_gold, predicted_vNav_gold, true_poses = np.load('circle_gold.npy')
 
     #################   Algorithm parameters   #################
     import argparse
@@ -60,7 +60,7 @@ if __name__ == '__main__':
 
     PREDICTION_FREQ = 25
 
-    for i in range(len(measured_imu)):
+    for i, imu_measurement in enumerate(imu_measurements):
         if i % PREDICTION_FREQ == 0:
             plotGroundTruthPose(i)
             predictedNavState = currentPreIntegratedIMU.predict(params.initial_state, params.IMU_bias)
@@ -70,7 +70,8 @@ if __name__ == '__main__':
             assert np.allclose(predictedNavState.pose().matrix(), predicted_poses_gold[i])
             assert np.allclose(predictedNavState.velocity(), predicted_vNav_gold[i])
 
-        currentPreIntegratedIMU.integrateMeasurement(measured_imu[i][:3], measured_imu[i][3:], params.dt)
+        measured_accuracy, measured_angular_vel = imu_measurement[:3], imu_measurement[3:]
+        currentPreIntegratedIMU.integrateMeasurement(measured_accuracy, measured_angular_vel, params.dt)
 
     plt.ioff()
     plt.show()
