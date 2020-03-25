@@ -73,5 +73,6 @@ if __name__ == '__main__':
         measured_accuracy, measured_angular_vel = imu_measurement[:3], imu_measurement[3:]
         currentPreIntegratedIMU.integrateMeasurement(measured_accuracy, measured_angular_vel, params.dt)
 
+    plt.figure(POSES_FIG).suptitle("Large poses: ground truth, small poses: estimate")
     plt.ioff()
     plt.show()

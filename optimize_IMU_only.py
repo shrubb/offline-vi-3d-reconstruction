@@ -1,4 +1,3 @@
-# Adapted from GTSAM's examples/PreintegrationExample.py
 import math
 
 import matplotlib.pyplot as plt
@@ -9,7 +8,7 @@ import gtsam
 from gtsam.utils.plot import plot_pose3
 
 if __name__ == '__main__':
-    imu_measurements, predicted_poses_gold, predicted_vNav_gold, true_poses = np.load('circle_gold.npy')
+    imu_measurements, _, _, true_poses = np.load('circle_gold.npy')
 
     ##############################   Algorithm parameters   ############################
     import argparse
@@ -148,6 +147,7 @@ if __name__ == '__main__':
     ax.set_xlim3d(-5, 5)
     ax.set_ylim3d(-5, 5)
     ax.set_zlim3d(-5, 5)
+    plt.figure(1).suptitle("Large poses: ground truth, small poses: estimate")
 
     plt.ioff()
     plt.show()
