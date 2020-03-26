@@ -147,6 +147,9 @@ if __name__ == '__main__':
     ax.set_xlim3d(-5, 5)
     ax.set_ylim3d(-5, 5)
     ax.set_zlim3d(-5, 5)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
     plt.figure(1).suptitle("Large poses: ground truth, small poses: estimate")
 
     plt.ioff()
