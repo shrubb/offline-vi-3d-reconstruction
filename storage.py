@@ -71,7 +71,7 @@ class LandmarksStorage(object):
             int
             Number of landmarks in the storage
         """
-        return len(landmarks_info)
+        return len(self.landmarks_info)
     
     def get_landmark_info(self, landmark_id):
         """
