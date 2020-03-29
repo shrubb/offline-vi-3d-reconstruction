@@ -14,12 +14,11 @@ def get_rotation_from_axis(axis, angle):
     return:
         gtsam.Rot3
     """
-    axis = gtsam.Unit3(gtsam.Point3(axis))
-    axis_np = axis.point3().vector()
+    axis = axis / np.linalg.norm(axis)
     return gtsam.Rot3(
         np.cos(angle) * np.eye(3) + \
-        np.sin(angle) * axis.skew() + \
-        (1 - np.cos(angle)) * np.outer(axis_np, axis_np)
+        np.sin(angle) * gtsam.Unit3(gtsam.Point3(axis)).skew() + \
+        (1 - np.cos(angle)) * np.outer(axis, axis)
     )
 
 def estimate_initial_orientation(initial_acceleration):
