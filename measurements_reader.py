@@ -1,5 +1,7 @@
 from pathlib import Path
+
 import numpy as np
+import numpy.lib.recfunctions
 
 NANOSECONDS_IN_SECOND = 10**9
 
@@ -32,9 +34,9 @@ class MARSMeasurementsReader:
         # Time in nanoseconds
         self.timestamps_IMU = IMU_data['time']
         # Acceleration along x,y,z (in body frame) in m/s^2
-        self.accelerometer  = IMU_data[['Ax', 'Ay', 'Az']].copy().view(np.float64).reshape(len(IMU_data), 3)
+        self.accelerometer  = np.lib.recfunctions.structured_to_unstructured(IMU_data[['Ax', 'Ay', 'Az']])
         # Angular velocity around x,y,z (in body frame) in rad/s
-        self.gyroscope      = IMU_data[['Wx', 'Wy', 'Wz']].copy().view(np.float64).reshape(len(IMU_data), 3)
+        self.gyroscope      = np.lib.recfunctions.structured_to_unstructured(IMU_data[['Wx', 'Wy', 'Wz']])
 
         ##############################     Read image metadata     ##############################
 
