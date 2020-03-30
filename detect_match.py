@@ -261,9 +261,16 @@ def match_sequential(sfm_storage, vis_matches, profile=True):
     return sfm_storage
 
 
-def detect_and_match(image_collection_raw, vis_matches=False):
+def detect_and_match(
+    image_collection_raw,
+    match_type='sequential',
+    vis_matches=False
+):
     image_collection = [x.astype(np.float64) / 255. for x in image_collection_raw]
     sfm_storage = SFMStorage()
     sfm_storage = extract_features(image_collection_raw, image_collection)
-    sfm_storage = match_pairwise(sfm_storage, vis_matches)
+    if match_type == 'pairwise':
+        sfm_storage = match_pairwise(sfm_storage, vis_matches)
+    elif match_type == 'sequential':
+        sfm_storage = match_sequential(sfm_storage, vis_matches)
     return sfm_storage
