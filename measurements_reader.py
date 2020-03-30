@@ -10,7 +10,6 @@ NANOSECONDS_IN_SECOND = 10**9
 class MARSMeasurementsReader:
     """
     Reads measurements coming from the 'MARS logger' app.
-    Currently, doesn't include images ('movie.mp4').
     """
     def __init__(self, path):
         """
@@ -18,6 +17,7 @@ class MARSMeasurementsReader:
             pathlib.Path or str
             A directory with 'frame_timestamps.txt', 'gyro_accel.csv', 'movie_metadata.csv', 'movie.mp4'.
         """
+        self._downscaling = 2.0
         self.path = Path(path)
 
         ##############################       Read IMU data       ##############################
@@ -52,13 +52,22 @@ class MARSMeasurementsReader:
         # Time in nanoseconds (scale is consistent with `self.timestamps_IMU`, but timestamps aren't)
         self.timestamps_camera = camera_data['time']
         self.camera_focal_length = np.lib.recfunctions.structured_to_unstructured(camera_data[['fx', 'fy']])
+        self.camera_focal_length /= self._downscaling
+
+        for self._skip_first_n_frames, timestamp_camera in enumerate(self.timestamps_camera):
+            if timestamp_camera >= self.timestamps_IMU[0]:
+                break
+        if self.timestamps_camera[-1] > self.timestamps_IMU[-1]:
+            raise NotImplementedError("IMU measurements end before video frames do")
+
+        self.timestamps_camera = self.timestamps_camera[self._skip_first_n_frames:]
+        self.camera_focal_length = self.camera_focal_length[self._skip_first_n_frames:]
 
         #############################  Check video for frame size  ##############################
 
         ok, sample_frame = cv2.VideoCapture(str(self.path / "movie.mp4")).read()
         assert ok
-        self.DOWNSCALING = 2.0 # not used yet
-        self.IMAGE_SIZE = (sample_frame.shape[1] / self.DOWNSCALING, sample_frame.shape[0] / self.DOWNSCALING)
+        self._image_size = (sample_frame.shape[1] / self._downscaling, sample_frame.shape[0] / self._downscaling)
 
     def get_dt_IMU(self, i):
         """
@@ -87,7 +96,8 @@ class MARSMeasurementsReader:
         return gtsam.Cal3DS2(
             *self.camera_focal_length[i],         # focal length
             0,                                    # skew
-            IMAGE_SIZE[0] / 2, IMAGE_SIZE[1] / 2, # principal point
+            self._image_size[0] / 2,              # principal point
+            self._image_size[1] / 2,
             0.25669783, -1.40364704,              # distortion for Huawei Honor 10: k1, k2
             -0.00332119, 0.00333635               # distortion for Huawei Honor 10: p1, p2
         )
@@ -101,11 +111,14 @@ class MARSMeasurementsReader:
             while video_reader.grab():
                 ok, image = video_reader.retrieve()
                 assert ok
-                image = cv2.resize(
-                    image, (0, 0), fx=scaling_factor, fy=scaling_factor,
-                    interpolation=cv2.INTER_AREA)
+                image = cv2.resize(image, (0, 0), fx=scaling_factor, fy=scaling_factor, interpolation=cv2.INTER_AREA)
 
                 yield np.rot90(image).copy()
 
         video_reader = cv2.VideoCapture(str(self.path / "movie.mp4"))
-        return generator(video_reader, 1 / self.DOWNSCALING)
+        # Skip the first frame because it's not represented in 'movie_metadata.csv' by MARS;
+        # Maybe skip more frames because they could start earlier than IMU
+        for _ in range(self._skip_first_n_frames + 1):
+            video_reader.grab()
+
+        return generator(video_reader, 1 / self._downscaling)
