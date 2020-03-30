@@ -9,6 +9,8 @@ from skimage.feature import match_descriptors
 from skimage.transform import ProjectiveTransform, AffineTransform
 from skimage.measure import ransac
 
+from skimage.feature import plot_matches
+
 import cv2
 
 
@@ -211,6 +213,51 @@ def match_pairwise(sfm_storage, vis_matches, profile=True):
                     matches
                 )
                 plt.show();
+    return sfm_storage
+
+
+def match_sequential(sfm_storage, vis_matches, profile=True):
+    """
+    Match keypoints of each image pair by their descriptors
+    """
+    for i in range(len(sfm_storage.img_pose)-1):
+        j = i+1
+        # detect features and extract descriptors
+        src_keypoints, src_descriptors = sfm_storage.img_pose[i].kp, sfm_storage.img_pose[i].desc
+        dest_keypoints, dest_descriptors = sfm_storage.img_pose[j].kp, sfm_storage.img_pose[j].desc
+        # RANSAC outlier filtering
+        if profile: beg = time.time()
+        robust_transform, matches = match_robust(
+            src_keypoints, src_descriptors,
+            dest_keypoints, dest_descriptors, 
+            method='flann', 
+            min_samples=4, 
+            residual_threshold=100, 
+            max_trials=3000, 
+        )
+        print(matches.shape)
+        if profile: print('Match and RANSAC time:', time.time() - beg)
+        # save img1-kp1-img2-kp2 matches to global helper SFM instance
+        for m in matches:
+            sfm_storage.img_pose[i].kp_matches[(m[0], j)] = m[1]
+            sfm_storage.img_pose[j].kp_matches[(m[1], i)] = m[0]
+        print(f"Feature matching: image {i} <-> image {j} ==> {len(matches)} matches")
+        # vis
+        FIGSIZE = (15, 10)
+        if vis_matches:
+            plt.figure(figsize=FIGSIZE)
+            ax = plt.axes()
+            ax.axis("off")
+            ax.set_title(f"Inlier correspondences: {len(matches)} points matched")
+            plot_matches(
+                ax, 
+                sfm_storage.img_pose[i].img, 
+                sfm_storage.img_pose[j].img,
+                src_keypoints[:,::-1],  # !!!
+                dest_keypoints[:,::-1],  # !!!
+                matches
+            )
+            plt.show();
     return sfm_storage
 
 
