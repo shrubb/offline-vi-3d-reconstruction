@@ -13,6 +13,10 @@ from skimage.feature import plot_matches
 
 import cv2
 
+from storage import SFMStorage, ImagePose
+import time
+import matplotlib.pyplot as plt
+from skimage.feature import plot_matches
 
 def detect_kp_desc(img, method='orb', n_keypoints=2000, **args):
     """Find keypoints and their descriptors on the image.
@@ -200,7 +204,7 @@ def match_pairwise(sfm_storage, vis_matches, profile=True):
             print(f"Feature matching: image {i} <-> image {j} ==> {len(matches)} matches")
             # vis
             if vis_matches:
-                plt.figure(figsize=FIGSIZE)
+                plt.figure()
                 ax = plt.axes()
                 ax.axis("off")
                 ax.set_title(f"Inlier correspondences: {len(matches)} points matched")

@@ -2,7 +2,7 @@ from collections import defaultdict
 
 import os
 import shutil
-import glob
+from pathlib import Path
 
 import numpy as np
 
@@ -23,8 +23,8 @@ def load_raw_image_collection(images_dir, target_size=(720, 1080)):
         list
         List of resized RGB-images
     """
-    images_list = glob.glob(f'{images_dir}/*.JPG')
-    
+    images_list = sorted(x for x in Path(images_dir).iterdir() if x.suffix.lower() in ('.jpg', '.jpeg', '.png'))
+
     _temp = io.imread(images_list[0])
     orig_size = (_temp.shape[0], _temp.shape[1])
     scale_factor = np.mean([orig_size[0] / target_size[0], orig_size[1] / target_size[1]])

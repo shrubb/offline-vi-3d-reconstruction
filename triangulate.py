@@ -16,6 +16,23 @@ from skimage import io
 
 import cv2
 
+from storage import Landmark
+
+def show_pcl(pcl, title=None, colors=None):
+    fig = plt.figure(figsize=(10,10))
+    ax = fig.add_subplot(111, projection='3d')
+    if title is not None:
+        plt.title(title)
+    if colors is not None:
+        ax.scatter(pcl[:,0], pcl[:,1], pcl[:,2], 'o', color=colors/255., label='Pointcloud')
+    else:
+        ax.scatter(pcl[:,0], pcl[:,1], pcl[:,2], 'o', label='Pointcloud')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+    ax.legend()
+    plt.tight_layout()
+    plt.show();
 
 def construct_intrinsic_matrix(focal_length, principal_point):
     K = np.eye(3)
@@ -113,9 +130,9 @@ def triangulate_3d_landmarks(sfm_storage, focal_length, principal_point, vis_map
                     landmark = Landmark()
                     landmark.pt = pt3d
                     pixel_coords_prev = np.array([prev.kp[k][1], prev.kp[k][0]], dtype=int)
-                    landmark.color = prev.img[pixel_coords_prev[0], pixel_coords_prev[1]]
+                    # landmark.color = prev.img[pixel_coords_prev[0], pixel_coords_prev[1]]
                     pixel_coords_cur = np.array([cur.kp[match_idx][1], cur.kp[match_idx][0]], dtype=int)
-                    landmark.color += cur.img[pixel_coords_cur[0], pixel_coords_cur[1]]
+                    landmark.color = cur.img[pixel_coords_cur[0], pixel_coords_cur[1]]
                     landmark.seen = 2
                     sfm_storage.landmark.append(landmark)
                     new_landmark_id = len(sfm_storage.landmark) - 1
@@ -128,7 +145,7 @@ def triangulate_3d_landmarks(sfm_storage, focal_length, principal_point, vis_map
             for e in range(len(sfm_storage.landmark)):
                 if sfm_storage.landmark[e].seen >= 3:
                     pcl[e] = pcl[e] / (sfm_storage.landmark[e].seen - 1)
-                colors[e] = colors[e] / sfm_storage.landmark[e].seen
+                # colors[e] = colors[e] / sfm_storage.landmark[e].seen
                 colors[e] = [int(colors[e][0]), int(colors[e][1]), int(colors[e][2])]
             show_pcl(pcl, title=f'Num points: {pcl.shape[0]}', colors=colors)
 
