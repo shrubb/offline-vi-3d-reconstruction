@@ -13,7 +13,7 @@ from skimage.feature import plot_matches
 
 import cv2
 
-from storage import SFMStorage, ImagePose
+from utils.storage import SFMStorage, ImagePose
 import time
 import matplotlib.pyplot as plt
 from skimage.feature import plot_matches

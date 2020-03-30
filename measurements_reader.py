@@ -1,3 +1,5 @@
+import gtsam
+
 from pathlib import Path
 
 import numpy as np
@@ -102,18 +104,30 @@ class MARSMeasurementsReader:
             -0.00332119, 0.00333635               # distortion for Huawei Honor 10: p1, p2
         )
 
-    def get_video_reader(self):
+    def get_video_reader(self, steps=None):
         """
+        steps:
+            iterable of int or None
+            Indices of frames which to yield.
+
         return:
             generator, yields np.ndarray
         """
-        def generator(video_reader, scaling_factor):
-            while video_reader.grab():
-                ok, image = video_reader.retrieve()
-                assert ok
-                image = cv2.resize(image, (0, 0), fx=scaling_factor, fy=scaling_factor, interpolation=cv2.INTER_AREA)
+        def generator(video_reader, scaling_factor, steps):
+            steps = sorted(steps, reverse=True)
+            frame_idx = 0
 
-                yield np.rot90(image).copy()
+            while video_reader.grab():
+                if len(steps) > 0 and frame_idx == steps[-1]:
+                    steps.pop()
+
+                    ok, image = video_reader.retrieve()
+                    assert ok
+                    image = cv2.resize(image, (0, 0), fx=scaling_factor, fy=scaling_factor, interpolation=cv2.INTER_AREA)
+
+                    yield np.rot90(image).copy()
+
+                frame_idx += 1
 
         video_reader = cv2.VideoCapture(str(self.path / "movie.mp4"))
         # Skip the first frame because it's not represented in 'movie_metadata.csv' by MARS;
@@ -121,4 +135,7 @@ class MARSMeasurementsReader:
         for _ in range(self._skip_first_n_frames + 1):
             video_reader.grab()
 
-        return generator(video_reader, 1 / self._downscaling)
+        if steps is None:
+            steps = range(int(video_reader.get(cv2.CAP_PROP_FRAME_COUNT)))
+
+        return generator(video_reader, 1 / self._downscaling, steps)

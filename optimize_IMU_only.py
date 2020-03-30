@@ -1,18 +1,21 @@
 import gtsam
+import gtsam_unstable
 from gtsam.utils.plot import plot_pose3
-
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 from measurements_reader import MARSMeasurementsReader
 
 import utils.geometry
 import utils.preintegration
+from utils.detect_match import detect_and_match
+
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
 import numpy as np
 import math
 
 if __name__ == '__main__':
-    measurements = MARSMeasurementsReader("sample_data/closed_trajectory")
+    measurements = MARSMeasurementsReader("sample_data/marx")
 
     ##############################   Algorithm parameters   ############################
 
@@ -23,7 +26,7 @@ if __name__ == '__main__':
     params.accelerometer_bias = np.array([0, 0, 0])
     params.gyroscope_bias = np.array([0, 0, 0])
     params.IMU_bias = gtsam.imuBias_ConstantBias(params.accelerometer_bias, params.gyroscope_bias)
-    params.IMU_bias_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 0.2)
+    params.IMU_bias_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 0.35)
 
     # Assume initial velocity is zero (consider dropping this assumption when the visual part comes!)
     initial_velocity = np.array([0, 0, 0])
@@ -54,13 +57,15 @@ if __name__ == '__main__':
     params.initial_pose_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 0.1)
     params.initial_velocity_covariance = gtsam.noiseModel_Isotropic.Sigma(3, 0.1)
 
-    ###############################    Build the factor graph   ####################################
+    ###############################    Build the factor graph   ####################################    
 
     factor_graph = gtsam.NonlinearFactorGraph()
 
     # A technical hack for defining variable names in GTSAM python bindings
     def symbol(letter, index):
         return int(gtsam.symbol(ord(letter), index))
+
+    #################################     Add IMU factors     ######################################
 
     imu_dts = [measurements.get_dt_IMU(i) for i in range(len(measurements.timestamps_IMU))]
     dt, preintegration_steps, acc, gyr = utils.preintegration.build_steps(
@@ -72,7 +77,8 @@ if __name__ == '__main__':
     # we will add factors between pairs (x₀, xₖ), (xₖ, x₂ₖ) etc., and as an IMU "measurement"
     # between e.g. x₀ and xₖ we will use combined (pre-integrated) measurements `0, 1, ..., k-1`.
     # Below, `k == PREINTEGRATE_EVERY_FRAMES`.
-    PREINTEGRATE_EVERY_FRAMES = 6
+    PREINTEGRATE_EVERY_FRAMES = 5
+    video_frame_steps = range(0, len(preintegration_steps), PREINTEGRATE_EVERY_FRAMES)
     preintegration_steps = preintegration_steps[::PREINTEGRATE_EVERY_FRAMES]
 
     # For code generalization, create pairs (0, k), (k, 2k), (2k, 3k), ..., (mk, N-1)
@@ -112,14 +118,37 @@ if __name__ == '__main__':
         gtsam.PriorFactorPose3(symbol('x', preintegration_steps[0]), params.initial_state.pose(), params.initial_pose_covariance))
     factor_graph.push_back(
         gtsam.PriorFactorVector(symbol('v', preintegration_steps[0]), params.initial_state.velocity(), params.initial_velocity_covariance))
+    factor_graph.push_back(
+        gtsam.PriorFactorConstantBias(symbol('b', preintegration_steps[0]), params.IMU_bias, params.IMU_bias_covariance))
     # factor_graph.push_back(
-    #     gtsam.PriorFactorConstantBias(symbol('b', preintegration_steps[0]), params.IMU_bias, params.IMU_bias_covariance))
+    #     gtsam.PriorFactorPoint3(symbol('m', preintegration_steps[0]), gtsam.Point3(0,1,0), gtsam.noiseModel_Isotropic.Sigma(3, 0.1)))
 
     # Other example priors, e.g. the intial and the final states should be roughly identical:
-    factor_graph.push_back(
-        gtsam.PriorFactorPose3(symbol('x', preintegration_steps[-1]), params.initial_state.pose(), params.initial_pose_covariance))
-    factor_graph.push_back(
-        gtsam.PriorFactorVector(symbol('v', preintegration_steps[-1]), params.initial_state.velocity(), params.initial_velocity_covariance))
+    # factor_graph.push_back(
+    #     gtsam.PriorFactorPose3(symbol('x', preintegration_steps[-1]), params.initial_state.pose(), params.initial_pose_covariance))
+    # factor_graph.push_back(
+    #     gtsam.PriorFactorVector(symbol('v', preintegration_steps[-1]), params.initial_state.velocity(), params.initial_velocity_covariance))
+
+    ####################################     Add visual factors     #######################################
+
+    calibration_matrices = [measurements.camera_intrinsics(i) for i in video_frame_steps]
+    landmarks_to_images = detect_and_match(measurements.get_video_reader(video_frame_steps))
+    
+    import pickle
+    with open(measurements.path / 'matching.pkl', 'wb') as f: pickle.dump(landmarks_to_images, f)
+    # with open('tmp.pkl', 'rb') as f: landmarks_to_images = pickle.load(f)
+
+    for landmark_idx, landmark_occurences in enumerate(landmarks_to_images):
+        for image_idx, landmark_pixel_coords in landmark_occurences:
+            factor = gtsam_unstable.ProjectionFactorPPPCal3DS2(
+                gtsam.Point2(*landmark_pixel_coords),
+                gtsam.noiseModel_Isotropic.Sigma(2, 2.0),
+                symbol('x', preintegration_steps[image_idx]),
+                symbol('r', 0),
+                symbol('m', landmark_idx),
+                calibration_matrices[image_idx]
+            )
+            factor_graph.push_back(factor)
 
     ############################# Specify initial values for optimization #################################
 
@@ -141,12 +170,25 @@ if __name__ == '__main__':
 
         current_preintegrated_IMU.integrateMeasurement(measured_acceleration, measured_angular_vel, dt[i])
 
+    # A very rough manual estimate or body-camera transformation
+    initial_values.insert(symbol('r', 0), gtsam.Pose3(
+        gtsam.Rot3(np.array([[0,-1,0], [-1,0,0], [0,0,-1]])),
+        gtsam.Point3()))
+
+    # Random estimates of points
+    for landmark_idx in range(len(landmarks_to_images)):
+        # Don't know why but let it be random
+        initial_values.insert(symbol('m', landmark_idx), gtsam.Point3(np.random.rand(3)))
+
     ###############################    Optimize the factor graph   ####################################
 
     # Use the Levenberg-Marquardt algorithm
-    optimization_params = gtsam.LevenbergMarquardtParams()
-    optimization_params.setVerbosityLM("SUMMARY")
-    optimizer = gtsam.LevenbergMarquardtOptimizer(factor_graph, initial_values, optimization_params)
+    # optimization_params = gtsam.LevenbergMarquardtParams()
+    # optimization_params = gtsam.DoglegParams()
+    optimization_params = gtsam.GaussNewtonParams()
+    # optimization_params.setVerbosityLM("SUMMARY")
+    # optimizer = gtsam.LevenbergMarquardtOptimizer(factor_graph, initial_values, optimization_params)
+    optimizer = gtsam.GaussNewtonOptimizer(factor_graph, initial_values, optimization_params)
     optimization_result = optimizer.optimize()
 
     ###############################        Plot the solution       ####################################
