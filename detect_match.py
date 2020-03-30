@@ -145,20 +145,22 @@ def match_robust(
     return model, matches
     
 
-def extract_features(image_collection_raw, image_collection, profile=True):
+def extract_features(image_collection, profile=True):
     """
     Match keypoints of each image pair by their descriptors.
     """
+    if profile:
+        from tqdm import tqdm
+    else:
+        tqdm = lambda x: x
+
     sfm_storage = SFMStorage()
-    for i in range(len(image_collection)):
+    for image in tqdm(image_collection):
         a = ImagePose()
-        a.img = image_collection_raw[i]
-        if profile: beg = time.time()
-        img = image_collection[i]
-        keypoints, a.desc = detect_kp_desc(img)
+        keypoints, a.desc = detect_kp_desc(image.astype(np.float64) / 255.)
         a.kp = keypoints[:,::-1]  # !!! because we need (x,y), not (y,x)
-        if profile: print('Detect time:', time.time() - beg)
         sfm_storage.img_pose.append(a)
+
     return sfm_storage
 
 
@@ -224,14 +226,27 @@ def match_sequential(sfm_storage, vis_matches, profile=True):
     """
     Match keypoints of each image pair by their descriptors
     """
-    for i in range(len(sfm_storage.img_pose)-1):
+    if profile:
+        from tqdm import tqdm
+    else:
+        tqdm = lambda x: x
+
+    # i-th element of this list describes occurences of the i-th landmark in images:
+    # it's a list of tuples (image_idx, (x, y))
+    landmarks_to_images = []
+
+    # Maps keypoints in the current image to landmarks (i.e. to indices in `landmarks_to_images`)
+    current_keypoints_to_landmarks = {}
+    # Also store the previous one to track correspondence
+    prev_keypoints_to_landmarks = {}
+
+    for i in tqdm(range(len(sfm_storage.img_pose)-1)):
         j = i+1
         # detect features and extract descriptors
         src_keypoints, src_descriptors = sfm_storage.img_pose[i].kp, sfm_storage.img_pose[i].desc
         dest_keypoints, dest_descriptors = sfm_storage.img_pose[j].kp, sfm_storage.img_pose[j].desc
         # RANSAC outlier filtering
-        if profile: beg = time.time()
-        robust_transform, matches = match_robust(
+        _, matches = match_robust(
             src_keypoints, src_descriptors,
             dest_keypoints, dest_descriptors, 
             method='flann', 
@@ -239,13 +254,27 @@ def match_sequential(sfm_storage, vis_matches, profile=True):
             residual_threshold=100, 
             max_trials=3000, 
         )
-        print(matches.shape)
-        if profile: print('Match and RANSAC time:', time.time() - beg)
+
+        for kp_index_prev, kp_index_curr in matches:
+            # Determine which landmark is it in the new image
+            if kp_index_prev in prev_keypoints_to_landmarks:
+                # Transfer correspondence from the previous frame
+                lm_idx = prev_keypoints_to_landmarks[kp_index_prev]
+                landmarks_to_images[lm_idx].append((j, dest_keypoints[kp_index_curr]))
+            else:
+                # Or assume it is a new landmark
+                lm_idx = len(landmarks_to_images)
+                landmarks_to_images.append([(i, src_keypoints[kp_index_prev]), (j, dest_keypoints[kp_index_curr])])
+
+            current_keypoints_to_landmarks[kp_index_curr] = lm_idx
+
+        prev_keypoints_to_landmarks, current_keypoints_to_landmarks = current_keypoints_to_landmarks, {}
+
         # save img1-kp1-img2-kp2 matches to global helper SFM instance
-        for m in matches:
-            sfm_storage.img_pose[i].kp_matches[(m[0], j)] = m[1]
-            sfm_storage.img_pose[j].kp_matches[(m[1], i)] = m[0]
-        print(f"Feature matching: image {i} <-> image {j} ==> {len(matches)} matches")
+        # for m in matches:
+        #     sfm_storage.img_pose[i].kp_matches[(m[0], j)] = m[1]
+        #     sfm_storage.img_pose[j].kp_matches[(m[1], i)] = m[0]
+        # print(f"Feature matching: image {i} <-> image {j} ==> {len(matches)} matches")
         # vis
         FIGSIZE = (15, 10)
         if vis_matches:
@@ -262,17 +291,14 @@ def match_sequential(sfm_storage, vis_matches, profile=True):
                 matches
             )
             plt.show();
-    return sfm_storage
+
+    print(f"Found total {len(landmarks_to_images)} landmarks")
+    return landmarks_to_images
 
 
-def detect_and_match(
-    image_collection_raw,
-    match_type='sequential',
-    vis_matches=False
-):
-    image_collection = [x.astype(np.float64) / 255. for x in image_collection_raw]
+def detect_and_match(image_collection, match_type='sequential', vis_matches=False):
     sfm_storage = SFMStorage()
-    sfm_storage = extract_features(image_collection_raw, image_collection)
+    sfm_storage = extract_features(image_collection)
     if match_type == 'pairwise':
         sfm_storage = match_pairwise(sfm_storage, vis_matches)
     elif match_type == 'sequential':
