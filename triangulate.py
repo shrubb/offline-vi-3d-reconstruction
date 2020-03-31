@@ -16,11 +16,11 @@ from skimage import io
 
 import cv2
 
-from storage import Landmark
+from utils.storage import Landmark
 
-def show_pcl(pcl, title=None, colors=None):
-    fig = plt.figure(figsize=(10,10))
-    ax = fig.add_subplot(111, projection='3d')
+def show_pcl(ax, pcl, title=None, colors=None):
+    # fig = plt.figure(figsize=(10,10))
+    # ax = fig.add_subplot(111, projection='3d')
     if title is not None:
         plt.title(title)
     if colors is not None:

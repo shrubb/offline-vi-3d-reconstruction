@@ -13,9 +13,15 @@ from mpl_toolkits.mplot3d import Axes3D
 
 import numpy as np
 import math
+import pickle
+
+# If `False`, optimize using IMU factors only.
+# Setting `True` now fails even on extremely simple and short sequences
+# (this behavior is detailed in the report).
+USE_VISUAL_FACTORS = False
 
 if __name__ == '__main__':
-    measurements = MARSMeasurementsReader("sample_data/marx")
+    measurements = MARSMeasurementsReader("sample_data/closed_trajectory")
 
     ##############################   Algorithm parameters   ############################
 
@@ -26,7 +32,7 @@ if __name__ == '__main__':
     params.accelerometer_bias = np.array([0, 0, 0])
     params.gyroscope_bias = np.array([0, 0, 0])
     params.IMU_bias = gtsam.imuBias_ConstantBias(params.accelerometer_bias, params.gyroscope_bias)
-    params.IMU_bias_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 0.35)
+    params.IMU_bias_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 1.0)
 
     # Assume initial velocity is zero (consider dropping this assumption when the visual part comes!)
     initial_velocity = np.array([0, 0, 0])
@@ -40,7 +46,7 @@ if __name__ == '__main__':
 
     # IMU preintegration algorithm parameters
     # "U" means "Z axis points up"; "MakeSharedD" would mean "Z axis points along the gravity"
-    preintegration_params = gtsam.PreintegrationCombinedParams.MakeSharedU(9.81)  # 9.81 is the gravity force
+    preintegration_params = gtsam.PreintegrationParams.MakeSharedU(9.81)  # 9.81 is the gravity force
     # Realistic noise parameters
     kGyroSigma = math.radians(0.5) / 60  # 0.5 degree ARW
     kAccelSigma = 0.1 / 60  # 10 cm VRW
@@ -50,11 +56,11 @@ if __name__ == '__main__':
     params.preintegration_params = preintegration_params
 
     # The stateful class that is responsible for preintegration
-    current_preintegrated_IMU = gtsam.PreintegratedCombinedMeasurements(params.preintegration_params, params.IMU_bias)
+    current_preintegrated_IMU = gtsam.PreintegratedImuMeasurements(params.preintegration_params, params.IMU_bias)
 
     # The certainty (covariance) of the initial position estimate
     # "Isotropic" means diagonal with equal sigmas
-    params.initial_pose_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 0.1)
+    params.initial_pose_covariance = gtsam.noiseModel_Isotropic.Sigma(6, 0.02)
     params.initial_velocity_covariance = gtsam.noiseModel_Isotropic.Sigma(3, 0.1)
 
     ###############################    Build the factor graph   ####################################    
@@ -77,7 +83,7 @@ if __name__ == '__main__':
     # we will add factors between pairs (x₀, xₖ), (xₖ, x₂ₖ) etc., and as an IMU "measurement"
     # between e.g. x₀ and xₖ we will use combined (pre-integrated) measurements `0, 1, ..., k-1`.
     # Below, `k == PREINTEGRATE_EVERY_FRAMES`.
-    PREINTEGRATE_EVERY_FRAMES = 5
+    PREINTEGRATE_EVERY_FRAMES = 6
     video_frame_steps = range(0, len(preintegration_steps), PREINTEGRATE_EVERY_FRAMES)
     preintegration_steps = preintegration_steps[::PREINTEGRATE_EVERY_FRAMES]
 
@@ -91,13 +97,12 @@ if __name__ == '__main__':
     for i, (measured_acceleration, measured_angular_vel) in enumerate(zip(acc, gyr)):
         if i == current_imu_factor_pair[1]:
             # Add IMU factor
-            factor = gtsam.CombinedImuFactor(
+            factor = gtsam.ImuFactor(
                 symbol('x', current_imu_factor_pair[0]),
                 symbol('v', current_imu_factor_pair[0]),
                 symbol('x', current_imu_factor_pair[1]),
                 symbol('v', current_imu_factor_pair[1]),
-                symbol('b', current_imu_factor_pair[0]),
-                symbol('b', current_imu_factor_pair[1]),
+                symbol('b', 0),
                 current_preintegrated_IMU)
             factor_graph.push_back(factor)
 
@@ -119,41 +124,61 @@ if __name__ == '__main__':
     factor_graph.push_back(
         gtsam.PriorFactorVector(symbol('v', preintegration_steps[0]), params.initial_state.velocity(), params.initial_velocity_covariance))
     factor_graph.push_back(
-        gtsam.PriorFactorConstantBias(symbol('b', preintegration_steps[0]), params.IMU_bias, params.IMU_bias_covariance))
-    # factor_graph.push_back(
-    #     gtsam.PriorFactorPoint3(symbol('m', preintegration_steps[0]), gtsam.Point3(0,1,0), gtsam.noiseModel_Isotropic.Sigma(3, 0.1)))
+        gtsam.PriorFactorConstantBias(symbol('b', 0), params.IMU_bias, params.IMU_bias_covariance))
 
-    # Other example priors, e.g. the intial and the final states should be roughly identical:
-    # factor_graph.push_back(
-    #     gtsam.PriorFactorPose3(symbol('x', preintegration_steps[-1]), params.initial_state.pose(), params.initial_pose_covariance))
-    # factor_graph.push_back(
-    #     gtsam.PriorFactorVector(symbol('v', preintegration_steps[-1]), params.initial_state.velocity(), params.initial_velocity_covariance))
+    if USE_VISUAL_FACTORS:
+        factor_graph.push_back(
+            gtsam.PriorFactorPoint3(symbol('m', 0), gtsam.Point3(1,0,0), gtsam.noiseModel_Isotropic.Sigma(3, 0.05)))
+
+    # Other example priors, e.g. a constraint that the intial and the final states should be roughly identical:
+    factor_graph.push_back(
+        gtsam.PriorFactorPose3(symbol('x', preintegration_steps[-1]), params.initial_state.pose(), params.initial_pose_covariance))
+    factor_graph.push_back(
+        gtsam.PriorFactorVector(symbol('v', preintegration_steps[-1]), params.initial_state.velocity(), params.initial_velocity_covariance))
 
     ####################################     Add visual factors     #######################################
 
-    calibration_matrices = [measurements.camera_intrinsics(i) for i in video_frame_steps]
-    landmarks_to_images = detect_and_match(measurements.get_video_reader(video_frame_steps))
-    
-    import pickle
-    with open(measurements.path / 'matching.pkl', 'wb') as f: pickle.dump(landmarks_to_images, f)
-    # with open('tmp.pkl', 'rb') as f: landmarks_to_images = pickle.load(f)
+    if USE_VISUAL_FACTORS:
+        calibration_matrices = [measurements.camera_intrinsics(i) for i in video_frame_steps]
+        
+        RECOMPUTE_MATCHING = True
+        if RECOMPUTE_MATCHING:
+            # Compute matches and cache them to disk
+            landmarks_to_images = detect_and_match(measurements.get_video_reader(video_frame_steps))
+            with open(measurements.path / 'matching.pkl', 'rb') as f: landmarks_to_images = pickle.load(f)
+        else:
+            # Load precomputed matching from disk
+            with open(measurements.path / 'matching.pkl', 'wb') as f: pickle.dump(landmarks_to_images, f)
 
-    for landmark_idx, landmark_occurences in enumerate(landmarks_to_images):
-        for image_idx, landmark_pixel_coords in landmark_occurences:
-            factor = gtsam_unstable.ProjectionFactorPPPCal3DS2(
-                gtsam.Point2(*landmark_pixel_coords),
-                gtsam.noiseModel_Isotropic.Sigma(2, 2.0),
-                symbol('x', preintegration_steps[image_idx]),
-                symbol('r', 0),
-                symbol('m', landmark_idx),
-                calibration_matrices[image_idx]
-            )
-            factor_graph.push_back(factor)
+        for landmark_idx, landmark_occurences in enumerate(landmarks_to_images):
+            for image_idx, landmark_pixel_coords in landmark_occurences:
+                factor = gtsam.ProjectionFactorPPPCal3DS2(
+                    gtsam.Point2(*landmark_pixel_coords),
+                    gtsam.noiseModel_Isotropic.Sigma(2, 2.0),
+                    symbol('x', preintegration_steps[image_idx]),
+                    symbol('r', 0),
+                    symbol('m', landmark_idx),
+                    calibration_matrices[image_idx]
+                )
+                factor_graph.push_back(factor)
+
+                # factor = gtsam.GenericProjectionFactorCal3DS2(
+                #     gtsam.Point2(*landmark_pixel_coords),
+                #     gtsam.noiseModel_Isotropic.Sigma(2, 2.0),
+                #     symbol('x', preintegration_steps[image_idx]),
+                #     symbol('m', landmark_idx),
+                #     calibration_matrices[image_idx],
+                #     # gtsam.Pose3(
+                #     #     gtsam.Rot3(np.array([[0,-1,0], [-1,0,0], [0,0,-1]])),
+                #     #     gtsam.Point3())
+                # )
 
     ############################# Specify initial values for optimization #################################
 
     # The optimization will start from these initial values of our target variables:
     initial_values = gtsam.Values()
+
+    initial_values.insert(symbol('b', 0), params.IMU_bias)
 
     # The initial values for coordinates (x) and velocities (v), estimated by IMU preintegration.
     # Note that our variables are only for those steps that have been chosen into `preintegration_steps`.
@@ -166,28 +191,25 @@ if __name__ == '__main__':
             predicted_nav_state = current_preintegrated_IMU.predict(params.initial_state, params.IMU_bias)
             initial_values.insert(symbol('x', i), predicted_nav_state.pose())
             initial_values.insert(symbol('v', i), predicted_nav_state.velocity())
-            initial_values.insert(symbol('b', i), params.IMU_bias)
 
         current_preintegrated_IMU.integrateMeasurement(measured_acceleration, measured_angular_vel, dt[i])
 
-    # A very rough manual estimate or body-camera transformation
-    initial_values.insert(symbol('r', 0), gtsam.Pose3(
-        gtsam.Rot3(np.array([[0,-1,0], [-1,0,0], [0,0,-1]])),
-        gtsam.Point3()))
+    if USE_VISUAL_FACTORS:
+        # A very rough manual estimate or body-camera transformation
+        initial_values.insert(symbol('r', 0),
+            gtsam.Pose3(
+                gtsam.Rot3(np.array([[0,-1,0], [-1,0,0], [0,0,-1]])),
+                gtsam.Point3()))
 
-    # Random estimates of points
-    for landmark_idx in range(len(landmarks_to_images)):
-        # Don't know why but let it be random
-        initial_values.insert(symbol('m', landmark_idx), gtsam.Point3(np.random.rand(3)))
+        # Random estimates of points
+        for landmark_idx in range(len(landmarks_to_images)):
+            initial_values.insert(symbol('m', landmark_idx), gtsam.Point3(np.random.rand(3)))
 
     ###############################    Optimize the factor graph   ####################################
 
-    # Use the Levenberg-Marquardt algorithm
-    # optimization_params = gtsam.LevenbergMarquardtParams()
-    # optimization_params = gtsam.DoglegParams()
+    # Use the Gauss-Newton algorithm
     optimization_params = gtsam.GaussNewtonParams()
-    # optimization_params.setVerbosityLM("SUMMARY")
-    # optimizer = gtsam.LevenbergMarquardtOptimizer(factor_graph, initial_values, optimization_params)
+    optimization_params.setVerbosity("ERROR")
     optimizer = gtsam.GaussNewtonOptimizer(factor_graph, initial_values, optimization_params)
     optimization_result = optimizer.optimize()
 
@@ -212,6 +234,15 @@ if __name__ == '__main__':
 
         plt.pause(0.01)
 
+    if USE_VISUAL_FACTORS:
+        # Plot the detected landmarks.
+        pcl = np.stack([optimization_result.atPoint3(symbol('m', i)).vector() for i in range(len(landmarks_to_images))])
+        from triangulate import show_pcl
+        show_pcl(axes, pcl)
+
+    print(f"Predicted IMU bias: {optimization_result.atimuBias_ConstantBias(symbol('b', 0))}")
+    # Commented code for plotting predicted IMU bias random walk.
+    """
     predicted_imu_biases = [optimization_result.atimuBias_ConstantBias(symbol('b', i)) for i in preintegration_steps]
     predicted_acccelerometer_biases = np.stack([x.accelerometer() for x in predicted_imu_biases])
     predicted_gyroscope_biases      = np.stack([x.gyroscope()     for x in predicted_imu_biases])
@@ -224,6 +255,7 @@ if __name__ == '__main__':
     plt.grid()
     plt.title("Predicted accelerometer and gyroscope biases")
     plt.legend(['Ax', 'Ay', 'Az', 'Gx', 'Gy', 'Gz'])
+    """
 
     plt.ioff()
     plt.show()

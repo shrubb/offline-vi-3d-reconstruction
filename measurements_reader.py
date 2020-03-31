@@ -132,7 +132,7 @@ class MARSMeasurementsReader:
         video_reader = cv2.VideoCapture(str(self.path / "movie.mp4"))
         # Skip the first frame because it's not represented in 'movie_metadata.csv' by MARS;
         # Maybe skip more frames because they could start earlier than IMU
-        for _ in range(self._skip_first_n_frames + 1):
+        for _ in range(self._skip_first_n_frames):
             video_reader.grab()
 
         if steps is None:
